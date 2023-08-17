@@ -345,7 +345,7 @@ function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = 
         'headers' => $header_array,
     ];
 
-    $get = wp_remote_request($image_url, $args);
+    $get = wp_remote_get($image_url, $args);
 
     if (is_wp_error($get)) {
         do_action(
@@ -374,6 +374,7 @@ function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = 
     } else {
 
         $mirror = wp_upload_bits($filename, '', wp_remote_retrieve_body($get));
+
     }
 
     $type = $filename_data['type'];
