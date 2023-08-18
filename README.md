@@ -2,7 +2,7 @@
 
 ## Установка
 
-Скопируйте папку "integrate-wsklad" в /wp-content/plugins в WordPress.
+Скопируйте папку "integrate-wsklad" в /wp-content/plugins в WordPress
 
 ## Настройка
 
