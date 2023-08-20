@@ -41,7 +41,15 @@ function add_log($message)
     if (is_array($message)) {
         $message = json_encode($message);
     }
-    $file = fopen(PLUGIN_PATH . "debug.log", "a");
+    $file_path = PLUGIN_PATH . "debug.log";
+    $size = filesize($file_path);
+    $size_cap = 1024 * 1024 * 2; # 2MB
+    $option = 'a';
+    if ($size && $size > $size_cap) {
+        $option = 'w'; # to overwrite
+    }
+
+    $file = fopen($file_path, $option);
     fwrite($file, "\n" . date('Y-m-d h:i:s') . " :: " . $message);
     fclose($file);
 
@@ -100,7 +108,6 @@ function integrate_wsklad_sync()
 {
     require_once PLUGIN_PATH . 'includes/functions.php';
 
-
     wp_redirect(admin_url('options-general.php?page=integrate_wsklad_plugin'));
     if (get_option(HOOK_PREFIX . 'sync') == 'running') {
         do_action(HOOK_PREFIX . 'log', "Sync was manually stopped.");
@@ -115,7 +122,7 @@ function integrate_wsklad_sync()
 
 
     # Start delete current products recursion
-    $force = true; # Change this value to false if you want previous products to be moved to trash on sync process
+    $force = true; # Change this value to false if you want previous products to be moved to trash
     do_action(HOOK_PREFIX . 'log', "Started deleting process. IS PERMANENT: " . $force);
     as_schedule_single_action(time(), HOOK_PREFIX . 'delete_current_products', array($force));
 }
@@ -161,7 +168,8 @@ function upload_imgs($queue = [])
     if (empty($queue)) {
         do_action(HOOK_PREFIX . 'log', "No products have images. Finishing the sync...");
         update_option(HOOK_PREFIX . 'sync', 'stopped');
-        wp_redirect(admin_url('options-general.php?page=integrate_wsklad_plugin'));
+        do_action(HOOK_PREFIX . 'log', "Sync successfully finished.");
+
         return ['result' => 'finished'];
     }
 

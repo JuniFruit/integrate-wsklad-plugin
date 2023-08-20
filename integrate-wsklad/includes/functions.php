@@ -104,16 +104,16 @@ function wsklad_request($path, $is_absolute = false)
 
     $request = wp_remote_request($endpoint, $args);
 
+    if (is_wp_error($request)) {
+        do_action(HOOK_PREFIX . 'log', "WSKLAD request error: " . $request->get_error_message() . ','
+            . $request->get_error_data());
+        return false;
 
+    }
 
     $response = json_decode($request['body'], true);
 
-    if (!empty($response["errors"]) and is_array($response["errors"])) {
-        foreach ($response["errors"] as $error) {
-            do_action(HOOK_PREFIX . 'log', "WSKLAD request error: " . $error);
-        }
-        return false;
-    }
+
 
     return $response;
 }
@@ -132,13 +132,24 @@ function create_woo_products($items)
 
         $product->set_price($item['minPrice']['value']);
         if (!empty($item['salePrices'])) {
-            $product->set_sale_price($item['salePrices'][0]['value']);
+            $prices = $item['salePrices'];
+            $product->set_regular_price(array_pop($prices)['value']);
+            if (!empty($prices)) {
+                $product->set_sale_price($item['salePrices'][0]['value']);
+            }
+        } else {
+            $product->set_regular_price($item['minPrice']['value']);
         }
-        $product->set_regular_price($item['buyPrice']['value']);
 
-        if (array_key_exists('description', $item)) {
-            $product->set_short_description($item['description']);
+        if (isset($item['description'])) {
+            $desc = $item['description'];
+            $first_sentence_end = strpos($desc, '.');
+            if ($first_sentence_end) {
+                $product->set_short_description(substr($desc, 0, $first_sentence_end));
+            }
+            $product->set_description($desc);
         }
+
         $stock = get_stock($item['id']);
 
         if ($item['variantsCount'] > 0) {
@@ -152,15 +163,18 @@ function create_woo_products($items)
 
         $product->set_sold_individually(true);
         $product->set_status('publish');
-        $product->add_meta_data('wsklad_id', $item['id']);
-        $product->add_meta_data('wsklad_imgs_url', $item['images']['meta']['href']);
-        $product->save_meta_data();
+
+        if ($item['images']['meta']['size'] > 0) {
+            $product->add_meta_data('wsklad_id', $item['id']);
+            $product->add_meta_data('wsklad_imgs_url', $item['images']['meta']['href']);
+            $product->save_meta_data();
+            update_img_queue($product->get_id());
+        }
 
         $product->save();
 
         apply_filters(HOOK_PREFIX . 'get_categories_ids', $product->get_id(), $item['pathName']);
 
-        update_img_queue($product->get_id());
 
     }
 }
@@ -208,15 +222,52 @@ function add_attributes($product, $item_id)
 function set_variants($product, $variants)
 {
     $attributes = [];
+    $pos = 0;
     foreach ($variants as $variant => $value) {
 
         $attribute = new WC_Product_Attribute();
-        $attribute->set_name($variant);
-        $attribute->set_options($value);
-        $attribute->set_position(0);
+        $attribute->set_position($pos);
         $attribute->set_visible(true);
         $attribute->set_variation(true);
+        $pos += 1;
+
+        $existingTaxes = wc_get_attribute_taxonomies();
+
+        $attribute_labels = wp_list_pluck($existingTaxes, 'attribute_label', 'attribute_name');
+        $slug = array_search($variant, $attribute_labels, true);
+
+        if (!$slug) {
+            //Not found, so create it:
+            $slug = wc_sanitize_taxonomy_name($variant);
+            $attribute_id = create_global_attribute($variant, $slug);
+        } else {
+            do_action(
+                HOOK_PREFIX . 'log',
+                "Taxonomy exist " . $variant . ". Using existing one."
+            );
+            //Otherwise find it's ID
+            //Taxonomies are in the format: array("slug" => 12, "slug" => 14)
+            $taxonomies = wp_list_pluck($existingTaxes, 'attribute_id', 'attribute_name');
+
+            if (!isset($taxonomies[$slug])) {
+                do_action(
+                    HOOK_PREFIX . 'log',
+                    "Could not get wc attribute ID for attribute " . $variant . " (slug: " . $slug . ") which should have existed!"
+                );
+                continue;
+            }
+
+            $attribute_id = (int) $taxonomies[$slug];
+        }
+
+        $taxonomy_name = wc_attribute_taxonomy_name($slug);
+
+        $attribute->set_id($attribute_id);
+        $attribute->set_name($taxonomy_name);
+        $attribute->set_options($value);
+
         $attributes[] = $attribute;
+
     }
 
     $product->set_attributes($attributes);
@@ -246,6 +297,7 @@ function create_categories_by_path($product_id, $product_pathName = 'Misc')
 {
 
     $category_names = explode('/', $product_pathName);
+    $i = 0;
     foreach ($category_names as $category_name) {
 
         $result = wp_insert_term(
@@ -254,21 +306,16 @@ function create_categories_by_path($product_id, $product_pathName = 'Misc')
         );
 
         if (!is_wp_error($result)) {
-            wp_set_object_terms($product_id, $result[0], 'product_cat');
+            wp_set_object_terms($product_id, $result[0], 'product_cat', $i > 0);
 
         } else {
-            $msg = 'A term with the name provided already exists with this parent.';
             do_action(HOOK_PREFIX . 'log', 'Failed to create category ' . $category_name
-                . ' .Error: ' . $result->get_error_message() . ' .Using existing category.');
+                . '. Error: ' . $result->get_error_message() . ' Using existing category.');
 
-            # if exists then error sends ID of the category
-            if ($msg == $result->get_error_message()) {
-                wp_set_object_terms($product_id, $result->get_error_data(), 'product_cat', true);
-
-            }
-
+            # error sends ID of the category
+            wp_set_object_terms($product_id, $result->get_error_data(), 'product_cat', $i > 0);
         }
-
+        $i += 1;
 
 
     }
@@ -298,7 +345,7 @@ function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = 
         'headers' => $header_array,
     ];
 
-    $get = wp_remote_get($image_url, $args);
+    $get = wp_remote_request($image_url, $args);
 
     if (is_wp_error($get)) {
         do_action(
@@ -419,6 +466,49 @@ function update_img_queue($product_id)
 function clear_img_queue()
 {
     update_option(HOOK_PREFIX . 'img_queue', []);
+}
+
+function create_global_attribute($name, $slug)
+{
+
+    $taxonomy_name = wc_attribute_taxonomy_name($slug);
+
+    if (taxonomy_exists($taxonomy_name)) {
+        return wc_attribute_taxonomy_id_by_name($slug);
+    }
+
+    do_action(HOOK_PREFIX . 'log', 'Creating a new Taxonomy ' . $taxonomy_name . ' with slug ' . '$slug');
+    $attribute_id = wc_create_attribute(
+        array(
+            'name' => $name,
+            'slug' => $slug,
+            'type' => 'select',
+            'order_by' => 'menu_order',
+            'has_archives' => false,
+        )
+    );
+
+    register_taxonomy(
+        $taxonomy_name,
+        apply_filters('woocommerce_taxonomy_objects_' . $taxonomy_name, array('product')),
+        apply_filters(
+            'woocommerce_taxonomy_args_' . $taxonomy_name,
+            array(
+                'labels' => array(
+                    'name' => $name,
+                ),
+                'hierarchical' => true,
+                'show_ui' => false,
+                'query_var' => true,
+                'rewrite' => false,
+            )
+        )
+    );
+
+    //Clear caches
+    delete_transient('wc_attribute_taxonomies');
+
+    return $attribute_id;
 }
 
 ?>
