@@ -7,7 +7,8 @@ defined('ABSPATH') or die('Not allowed!');
 add_filter(HOOK_PREFIX . 'get_attributes', 'add_attributes', 10, 2);
 add_filter(HOOK_PREFIX . 'get_categories_ids', 'create_categories_by_path', 20, 2);
 add_filter(HOOK_PREFIX . 'set_variants', 'set_variants', 10, 2);
-
+add_filter(HOOK_PREFIX . 'set_variations', 'set_variations', 10);
+add_filter(HOOK_PREFIX . 'set_stock', 'set_stock_for_variations', 10, 2);
 
 
 
@@ -23,7 +24,7 @@ function wh_deleteProducts($force = false, $batch = 10)
 {
 
 
-    $products = wc_get_products(['numberposts' => $batch]);
+    $products = wc_get_products(['numberposts' => $batch, 'status' => 'draft']);
 
     if (empty($products)) {
         return false;
@@ -118,66 +119,93 @@ function wsklad_request($path, $is_absolute = false)
     return $response;
 }
 
-function create_woo_products($items)
+function update_product($product, $item)
 {
+    require_once PLUGIN_PATH . 'includes/acf_funcs.php';
+    $product->set_name($item['name']); // product title
 
 
-    foreach ($items as $item) {
-        $product = new WC_Product_Simple();
-
-        do_action(HOOK_PREFIX . 'log', "Creating product " . $item['name'] . "...");
-
-        $product->set_name($item['name']); // product title
-        $product->set_slug($item['externalCode']);
-
-        $product->set_price($item['minPrice']['value']);
-        if (!empty($item['salePrices'])) {
-            $prices = $item['salePrices'];
-            $product->set_regular_price(array_pop($prices)['value']);
-            if (!empty($prices)) {
-                $product->set_sale_price($item['salePrices'][0]['value']);
-            }
-        } else {
-            $product->set_regular_price($item['minPrice']['value']);
+    $product->set_price($item['minPrice']['value']);
+    if (!empty($item['salePrices'])) {
+        $prices = $item['salePrices'];
+        $product->set_regular_price(array_pop($prices)['value']);
+        if (!empty($prices)) {
+            $product->set_sale_price($item['salePrices'][0]['value']);
         }
+    } else {
+        $product->set_regular_price($item['minPrice']['value']);
+    }
 
-        if (isset($item['description'])) {
-            $desc = $item['description'];
-            $first_sentence_end = strpos($desc, '.');
-            if ($first_sentence_end) {
-                $product->set_short_description(substr($desc, 0, $first_sentence_end));
-            }
-            $product->set_description($desc);
+    if (isset($item['description'])) {
+        $desc = $item['description'];
+        $first_sentence_end = strpos($desc, '.');
+        if ($first_sentence_end) {
+            $product->set_short_description(substr($desc, 0, $first_sentence_end));
         }
+        $product->set_description($desc);
+    } else {
+        $product->set_description('');
+    }
+    $stock = intval(get_stock($item['id']));
+    $product->set_manage_stock(true);
+    $product->set_stock_status($stock > 0 ? 'instock' : 'outofstock');
+    $product->set_stock_quantity($stock);
+    $product->set_backorders('no'); // 'yes', 'no' or 'notify'
+    $product->set_low_stock_amount(0);
+    $product->set_sold_individually(true);
+    $product->set_status('publish');
+    $product->save();
 
-        $stock = get_stock($item['id']);
+    apply_filters(HOOK_PREFIX . 'get_categories_ids', $product->get_id(), $item['pathName']);
+    if ($item['variantsCount'] > 0) {
+        apply_filters(HOOK_PREFIX . 'get_attributes', $product, $item['id']);
+        // apply_filters(HOOK_PREFIX . 'set_stock', $product, $item['id']);
+    } else {
+        $product->set_attributes([]);
+    }
 
-        if ($item['variantsCount'] > 0) {
-            apply_filters(HOOK_PREFIX . 'get_attributes', $product, $item['id']);
-        }
 
-        $product->set_stock_status($stock > 0 ? 'instock' : 'outofstock'); // 'instock', 'outofstock' or 'onbackorder'
-        $product->set_stock_quantity($stock);
-        $product->set_backorders('no'); // 'yes', 'no' or 'notify'
-        $product->set_low_stock_amount(1);
-
-        $product->set_sold_individually(true);
-        $product->set_status('publish');
-
-        if ($item['images']['meta']['size'] > 0) {
-            $product->add_meta_data('wsklad_id', $item['id']);
-            $product->add_meta_data('wsklad_imgs_url', $item['images']['meta']['href']);
-            $product->save_meta_data();
-            update_img_queue($product->get_id());
-        }
-
+    if ($item['images']['meta']['size'] > 0) {
+        do_action(HOOK_PREFIX . 'log', "Found " . $item['images']['meta']['size'] . ' images for '
+            . $product->get_name() . ' adding to queue');
+        $product->add_meta_data('wsklad_id', $item['id']);
+        $product->add_meta_data('wsklad_imgs_url', $item['images']['meta']['href']);
+        $product->save_meta_data();
+        update_img_queue($product->get_id());
+    } else {
+        delete_post_meta($product->get_id(), 'wsklad_id');
+        delete_post_meta($product->get_id(), 'wsklad_imgs_url');
+        set_post_thumbnail($product->get_id(), get_option('woocommerce_placeholder_image'));
+        $product->set_gallery_image_ids([get_option('woocommerce_placeholder_image')]);
         $product->save();
 
-        apply_filters(HOOK_PREFIX . 'get_categories_ids', $product->get_id(), $item['pathName']);
+    }
+    update_acf_fields_queue($product->get_id());
+}
+
+function create_or_update_woo_products($items)
+{
+    foreach ($items as $item) {
+        $products = wc_get_products(['slug' => $item['id'], 'status' => 'draft']);
+        $product;
+        if (empty($products)) {
+            do_action(HOOK_PREFIX . 'log', "Couldn't find " . $item['name'] . ". Creating new one...");
+            $product = new WC_Product_Variable();
+
+            $product->set_slug($item['id']);
+
+        } else {
+            $product = $products[0];
+        }
 
 
+        do_action(HOOK_PREFIX . 'log', "Updating product " . $item['name'] . "...");
+        update_product($product, $item);
+        $product->save();
     }
 }
+
+
 
 function add_attributes($product, $item_id)
 {
@@ -219,6 +247,91 @@ function add_attributes($product, $item_id)
     return $product;
 }
 
+function set_variations($attributes, $product)
+{
+    # We setting only color variations
+
+    do_action(HOOK_PREFIX . 'log', "Setting variations...");
+    $color_attr = null;
+
+    foreach ($attributes as $attr) {
+
+        if ($attr->get_name() === 'pa_czvet') {
+            $color_attr = $attr;
+            break;
+        } else {
+            continue;
+        }
+
+    }
+
+    # Options from wsklad
+    $color_options = [];
+    # Existing product variations
+    $color_variations = [];
+    if ($color_attr) {
+        $color_options = $color_attr->get_options();
+        $variations = $product->get_available_variations();
+        foreach ($variations as $variation) {
+            if (isset($variation['attributes']['attribute_' . $color_attr->get_name()])) {
+                array_push($color_variations, $variation);
+            }
+        }
+    }
+
+    if (count($color_variations) < 1 && !empty($color_options)) {
+        do_action(HOOK_PREFIX . 'log', "No variations found. Creating variations...");
+        create_variations_for_product($product, $color_attr->get_name(), $color_options);
+        return;
+    }
+
+
+    # Update existing variations if there is a difference delete or create variation
+    do_action(HOOK_PREFIX . 'log', "Updating variations... Found " . count($color_variations));
+
+    foreach ($color_variations as $color_var) {
+        $curr_var = wc_get_product($color_var['variation_id']);
+
+
+        if (!empty($color_options)) {
+            $color_option = array_pop($color_options);
+            $curr_var->set_attributes([$color_attr->get_name() => $color_option]);
+            $curr_var->set_manage_stock(true);
+            $curr_var->set_regular_price($product->get_regular_price());
+            $curr_var->set_stock_quantity($product->get_stock_quantity());
+            $curr_var->set_stock_status($product->get_stock_status());
+            $curr_var->set_sale_price($product->get_sale_price());
+            $curr_var->set_price($product->get_price());
+            $curr_var->save();
+        } else {
+            $curr_var->delete(true);
+        }
+    }
+
+    if (!empty($color_options)) {
+        create_variations_for_product($product, $color_attr->get_name(), $color_options);
+    }
+    return;
+}
+
+function create_variations_for_product($product, $attr_name, $options)
+{
+    foreach ($options as $option) {
+        $variation = new WC_Product_Variation();
+        $variation->set_parent_id($product->get_id());
+        $variation->set_manage_stock(true);
+        $variation->set_attributes(array($attr_name => $option));
+        $variation->set_regular_price($product->get_regular_price());
+        $variation->set_stock_quantity($product->get_stock_quantity());
+        $variation->set_low_stock_amount(0);
+        $variation->set_sale_price($product->get_sale_price());
+        $variation->set_stock_status($product->get_stock_status());
+        $variation->set_price($product->get_price());
+        $variation->save();
+    }
+
+}
+
 function set_variants($product, $variants)
 {
     $attributes = [];
@@ -228,7 +341,7 @@ function set_variants($product, $variants)
         $attribute = new WC_Product_Attribute();
         $attribute->set_position($pos);
         $attribute->set_visible(true);
-        $attribute->set_variation(true);
+        $attribute->set_variation($variant === "Цвет" ? true : false);
         $pos += 1;
 
         $existingTaxes = wc_get_attribute_taxonomies();
@@ -271,8 +384,22 @@ function set_variants($product, $variants)
     }
 
     $product->set_attributes($attributes);
+    set_variations($attributes, $product);
+    $product->save();
+}
 
-    return $product;
+
+function set_stock_for_variations($product, $item_id)
+{
+    $variations = $product->get_available_variations();
+    $stock = intval(get_stock($item_id));
+    $product->set_stock_status($stock > 0 ? 'instock' : 'outofstock'); // 'instock', 'outofstock' or 'onbackorder'
+
+    foreach ($variations as $variation) {
+        wc_update_product_stock($variation['variation_id'], $stock);
+    }
+
+    $product->save();
 }
 
 function get_stock($product_id)
@@ -325,9 +452,11 @@ function create_categories_by_path($product_id, $product_pathName = 'Misc')
 function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = '')
 {
 
-    $id = check_exist_image_by_url($image_url);
-    if ($id)
+    $id = check_exist_image_by_url($image_url . $product_id);
+    if ($id) {
         return $id;
+
+    }
 
     $uploads_dir = wp_upload_dir();
     $filename_data = wp_check_filetype($filename);
@@ -345,7 +474,16 @@ function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = 
         'headers' => $header_array,
     ];
 
-    $get = wp_remote_get($image_url, $args);
+    $reroute_server = get_option(HOOK_PREFIX . 'reroute_server');
+    $get = '';
+    if (!empty($reroute_server)) {
+        $endpoint = $reroute_server . '?image_url=' . $image_url;
+        do_action(HOOK_PREFIX . 'log', "Reroute server endpoint exists. Sending request to" . $endpoint);
+        $get = wp_remote_get($endpoint, $args);
+    } else {
+        $get = wp_remote_get($image_url, $args);
+    }
+
 
     if (is_wp_error($get)) {
         do_action(
@@ -394,7 +532,7 @@ function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = 
 
     $attach_data = wp_generate_attachment_metadata($attach_id, $mirror['file']);
 
-    update_post_meta($attach_id, HOOK_PREFIX . 'url', $image_url);
+    update_post_meta($attach_id, HOOK_PREFIX . 'url', $image_url . $product_id);
 
     wp_update_attachment_metadata($attach_id, $attach_data);
 
@@ -454,7 +592,6 @@ function check_exist_image_by_url($img_url)
 function update_img_queue($product_id)
 {
     # Subject to be reworked;
-
     $prev = get_option(HOOK_PREFIX . 'img_queue');
     if ($prev) {
         array_push($prev, $product_id);

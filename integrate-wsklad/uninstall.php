@@ -9,6 +9,7 @@ if (!defined('WP_UNINSTALL_PLUGIN')) {
 
 delete_option('integrate_wsklad_login');
 delete_option('integrate_wsklad_password');
+delete_option('integrate_wsklad_reroute_server');
 
 # Delete attachment db records
 

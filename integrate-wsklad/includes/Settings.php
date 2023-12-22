@@ -22,6 +22,7 @@ class SettingsInit
         // Code to execute on activation.
         add_option(HOOK_PREFIX . 'sync', 'stopped');
         add_option(HOOK_PREFIX . 'img_queue', array());
+        add_option(HOOK_PREFIX . 'acf_fields_queue', array());
 
     }
 
@@ -29,6 +30,7 @@ class SettingsInit
     {
         delete_option(HOOK_PREFIX . 'sync');
         delete_option(HOOK_PREFIX . 'img_queue');
+        delete_option(HOOK_PREFIX . 'acf_fields_queue');
     }
 
     public function addSettingsPage()
@@ -61,6 +63,19 @@ class SettingsInit
                         <td><input type="password" name="integrate_wsklad_password" required
                                 value="<?php echo esc_attr(get_option('integrate_wsklad_password')); ?>" /></td>
                     </tr>
+                    <tr valign="top">
+                        <th scope="row">Pic download reroute server endpoint (optional):</th>
+                        <td><input type="text" name="integrate_wsklad_reroute_server"
+                                value="<?php echo esc_attr(get_option('integrate_wsklad_reroute_server')); ?>" /></td>
+                    </tr>
+                    <tr valign="top">
+                        <td>
+                            <?php if (!empty(get_option('integrate_wsklad_reroute_server'))) {
+                                echo '<a target="_blank" href="' . explode("/", get_option('integrate_wsklad_reroute_server'))[0] . "//" . explode("/", get_option('integrate_wsklad_reroute_server'))[2] . '">Wake up server</a>';
+                            } ?>
+                        </td>
+
+                    </tr>
 
 
                 </table>
@@ -69,8 +84,7 @@ class SettingsInit
 
             <h2>Managing</h2>
 
-            <h4> Sync process will delete all existing products and then load new ones from WSKLAD CRM. Make sure your
-                CRM has all necessary products </h4>
+            <h4> Sync may take a while. Do not try to stop it early. All Woocommerce draft products will be deleted. </h4>
 
 
 
@@ -91,6 +105,7 @@ class SettingsInit
     {
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'login');
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'password');
+        register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'reroute_server');
 
     }
 
