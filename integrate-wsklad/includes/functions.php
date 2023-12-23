@@ -114,7 +114,7 @@ function wsklad_request($path, $is_absolute = false)
 
     $response = json_decode($request['body'], true);
 
-
+    
 
     return $response;
 }

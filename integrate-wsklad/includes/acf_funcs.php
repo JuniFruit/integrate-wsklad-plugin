@@ -17,19 +17,19 @@ function add_acf_fields($product)
     }
 
     $classes_res = add_product_classes($product);
-    if ($classes_res != true) {
+    if (gettype($classes_res) === 'string') {
         do_action(HOOK_PREFIX . 'log', 'Cannot update classes: ' . $classes_res);
-
     }
 
+
     $images_res = add_product_images($product);
-    if ($images_res != true) {
+    if (gettype($images_res) === 'string') {
         do_action(HOOK_PREFIX . 'log', 'Cannot update product images: ' . $images_res);
 
     }
 
     $tech_desc_res = add_product_tech_description($product);
-    if ($tech_desc_res != true) {
+    if (gettype($tech_desc_res) === 'string') {
         do_action(HOOK_PREFIX . 'log', 'Cannot update product tech block: ' . $tech_desc_res);
 
     }

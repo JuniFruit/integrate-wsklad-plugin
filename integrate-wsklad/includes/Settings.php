@@ -23,6 +23,7 @@ class SettingsInit
         add_option(HOOK_PREFIX . 'sync', 'stopped');
         add_option(HOOK_PREFIX . 'img_queue', array());
         add_option(HOOK_PREFIX . 'acf_fields_queue', array());
+        add_option(HOOK_PREFIX . 'debug_log', ['Init' => 'Hello']);
 
     }
 
@@ -31,6 +32,7 @@ class SettingsInit
         delete_option(HOOK_PREFIX . 'sync');
         delete_option(HOOK_PREFIX . 'img_queue');
         delete_option(HOOK_PREFIX . 'acf_fields_queue');
+        delete_option(HOOK_PREFIX . 'debug_log');
     }
 
     public function addSettingsPage()
@@ -92,10 +94,22 @@ class SettingsInit
                 <input type="hidden" name="action" value="integrate_wsklad_sync"></input>
 
 
-                <button type="submit">
+                <button id="syncButton" type="submit">
                     <?php echo get_option(HOOK_PREFIX . 'sync') == 'running' ? 'Stop sync' : 'Start sync' ?>
                 </button>
             </form>
+
+            <h2>Debug Log</h2>
+
+            <div style="width:60rem;height:40rem;overflow-y:scroll;overflow-x:scroll;border:2px solid rgba(0,0,0,0.4);">
+                <pre> 
+                    <?php foreach (get_option(HOOK_PREFIX . 'debug_log') as $c_key => $c_value) 
+                            {
+                               echo $c_value . "\n";
+                            } 
+                    ?> 
+                </pre>
+            </div>
 
         </div>
         <?php
