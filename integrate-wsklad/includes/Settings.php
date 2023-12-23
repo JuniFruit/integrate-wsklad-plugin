@@ -23,7 +23,8 @@ class SettingsInit
         add_option(HOOK_PREFIX . 'sync', 'stopped');
         add_option(HOOK_PREFIX . 'img_queue', array());
         add_option(HOOK_PREFIX . 'acf_fields_queue', array());
-        add_option(HOOK_PREFIX . 'debug_log', ['Init' => 'Hello']);
+        add_option(HOOK_PREFIX . 'debug_log', array());
+        add_option(HOOK_PREFIX . 'product_batch', 50);
 
     }
 
@@ -33,6 +34,7 @@ class SettingsInit
         delete_option(HOOK_PREFIX . 'img_queue');
         delete_option(HOOK_PREFIX . 'acf_fields_queue');
         delete_option(HOOK_PREFIX . 'debug_log');
+        delete_option(HOOK_PREFIX . 'product_batch');
     }
 
     public function addSettingsPage()
@@ -78,6 +80,11 @@ class SettingsInit
                         </td>
 
                     </tr>
+                    <tr valign="top">
+                        <th scope="row">Products per hook:</th>
+                        <td><input type="number" name="integrate_wsklad_product_batch" min="0"
+                                value="<?php echo esc_attr(get_option('integrate_wsklad_product_batch')); ?>" /></td>
+                    </tr>
 
 
                 </table>
@@ -103,7 +110,12 @@ class SettingsInit
 
             <div style="width:60rem;height:40rem;overflow-y:scroll;overflow-x:scroll;border:2px solid rgba(0,0,0,0.4);">
                 <pre> 
-                    <?php foreach (get_option(HOOK_PREFIX . 'debug_log') as $c_key => $c_value) 
+                    <?php $debug_log = get_option(HOOK_PREFIX . 'debug_log');
+                    if (!$debug_log || gettype($debug_log) !== 'array') {
+                        echo 'No messages in log'; 
+                        return; 
+                    }
+                    foreach ($debug_log as $c_key => $c_value) 
                             {
                                echo $c_value . "\n";
                             } 
@@ -120,6 +132,7 @@ class SettingsInit
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'login');
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'password');
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'reroute_server');
+        register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'product_batch');
 
     }
 

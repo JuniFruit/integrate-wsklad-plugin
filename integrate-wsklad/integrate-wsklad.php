@@ -17,7 +17,7 @@ defined('ABSPATH') or die('Not allowed!');
 define('PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('PLUGIN_URL', plugin_dir_url(__FILE__));
 define('HOOK_PREFIX', 'integrate_wsklad_');
-define('PRODUCT_BATCH', 500); // how many products we process at once
+define('PRODUCT_BATCH', intval(get_option('integrate_wsklad_product_batch'))); // how many products we process at once
 
 add_action('woocommerce_init', 'plugin_init');
 add_action('admin_post_integrate_wsklad_sync', 'integrate_wsklad_sync', 5, 2);
@@ -55,6 +55,7 @@ function add_log($message)
     $file = fopen($file_path, $option);
     $date = date('Y-m-d h:i:s');
     $debug_log_db = get_option(HOOK_PREFIX . "debug_log");
+    if (!$debug_log_db) $debug_log_db = array();
     array_push($debug_log_db, $date . "::" . $message);
     update_option(HOOK_PREFIX . 'debug_log', $debug_log_db);
     fwrite($file, "\n" . $date . " :: " . $message);
@@ -141,10 +142,10 @@ function integrate_wsklad_sync()
     }
 
     # Log action, update state
-    do_action(HOOK_PREFIX . 'log', "Started sync with WSKLAD");
-    do_action(HOOK_PREFIX . 'log', "Product batch is set to: " . PRODUCT_BATCH);
     update_option(HOOK_PREFIX . 'debug_log', array());
     update_option(HOOK_PREFIX . 'sync', 'running');
+    do_action(HOOK_PREFIX . 'log', "Started sync with WSKLAD");
+    do_action(HOOK_PREFIX . 'log', "Product batch is set to: " . PRODUCT_BATCH);
     # Start execution chain
     execute_sync_step(0, array(PRODUCT_BATCH));
 }
@@ -156,7 +157,7 @@ function unpublish_current_products($batch)
 
     if (empty($products)) {
         do_action(HOOK_PREFIX . 'log', 'No products to unpublish, skipping this step.');
-        execute_sync_step(1, array(0), true);
+        execute_sync_step(1, 0, true);
         return ['result' => 'finished'];
 
     }
@@ -183,8 +184,8 @@ function delete_woo_products($force = true)
 {
     do_action(HOOK_PREFIX . 'log', "Function delete_woo_products started");
     if (get_option(HOOK_PREFIX . 'sync') == 'stopped') {
-
         do_action(HOOK_PREFIX . 'log', "Sync was stopped. Stop hook execution.");
+        update_option(HOOK_PREFIX . 'sync', 'stopped');
         return ['result' => 'finished'];
     }
 
@@ -213,6 +214,7 @@ function process_products($offset = 0)
     do_action(HOOK_PREFIX . 'log', "Function process_products started");
     if (get_option(HOOK_PREFIX . 'sync') == 'stopped') {
         do_action(HOOK_PREFIX . 'log', "Sync was stopped. Stop hook execution.");
+        update_option(HOOK_PREFIX . 'sync', 'stopped');
         return ['result' => 'finished'];
     }
     require_once PLUGIN_PATH . 'includes/functions.php';
@@ -223,7 +225,7 @@ function process_products($offset = 0)
 
     if (!$wsklad_products || empty($wsklad_products['rows'])) {
         do_action(HOOK_PREFIX . 'log', "No products returned from WSKLAD. Skip to loading images now.");
-        execute_sync_step(2,  array(get_option(HOOK_PREFIX . 'img_queue')), true);
+        execute_sync_step(2,  get_option(HOOK_PREFIX . 'img_queue'), true);
         return ['result' => 'finished'];
     }
 
@@ -244,6 +246,7 @@ function upload_imgs($queue = [])
     do_action(HOOK_PREFIX . 'log', "Function upload_imgs started");
     if (get_option(HOOK_PREFIX . 'sync') == 'stopped') {
         do_action(HOOK_PREFIX . 'log', "Sync was stopped. Stop hook execution.");
+        update_option(HOOK_PREFIX . 'sync', 'stopped');
         return ['result' => 'finished'];
     }
 
@@ -284,6 +287,7 @@ function update_acf($queue = [])
     do_action(HOOK_PREFIX . 'log', "Function update_acf started");
     if (get_option(HOOK_PREFIX . 'sync') == 'stopped') {
         do_action(HOOK_PREFIX . 'log', "Sync was stopped. Stop hook execution.");
+        update_option(HOOK_PREFIX . 'sync', 'stopped');
         return ['result' => 'finished'];
     }
 
