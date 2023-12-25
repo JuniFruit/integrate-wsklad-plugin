@@ -22,6 +22,7 @@ class SettingsInit
         // Code to execute on activation.
         add_option(HOOK_PREFIX . 'sync', 'stopped');
         add_option(HOOK_PREFIX . 'img_queue', array());
+        add_option(HOOK_PREFIX . 'product_variations_queue', array());
         add_option(HOOK_PREFIX . 'acf_fields_queue', array());
         add_option(HOOK_PREFIX . 'debug_log', array());
         add_option(HOOK_PREFIX . 'product_batch', 50);
@@ -32,6 +33,7 @@ class SettingsInit
     {
         delete_option(HOOK_PREFIX . 'sync');
         delete_option(HOOK_PREFIX . 'img_queue');
+        delete_option(HOOK_PREFIX . 'product_variations_queue');
         delete_option(HOOK_PREFIX . 'acf_fields_queue');
         delete_option(HOOK_PREFIX . 'debug_log');
         delete_option(HOOK_PREFIX . 'product_batch');

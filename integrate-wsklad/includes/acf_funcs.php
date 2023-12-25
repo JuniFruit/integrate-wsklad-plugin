@@ -33,10 +33,6 @@ function add_acf_fields($product)
         do_action(HOOK_PREFIX . 'log', 'Cannot update product tech block: ' . $tech_desc_res);
 
     }
-
-    do_action(HOOK_PREFIX . 'log', 'Updating variations imgs...');
-    update_variations_imgs($product);
-
 }
 
 /* 
@@ -91,7 +87,7 @@ function add_product_classes($product)
 
     $field_key = $acf_fields['key'];
 
-    return update_field($field_key, $fields_arr, $product_id) == false ? "Something went wrong." : true;
+    return update_field($field_key, $fields_arr, $product_id);
 
 }
 
@@ -135,28 +131,9 @@ function add_product_images($product)
 
     $field_key = $acf_pic_fields['key'];
 
-    return update_field($field_key, $fields_arr, $product_id) == false ? "Something went wrong." : true;
+    return update_field($field_key, $fields_arr, $product_id);
 
 }
-
-function update_variations_imgs($product)
-{
-    $variations = $product->get_available_variations();
-    $gallery = get_images_from_product($product);
-    foreach ($variations as $variant) {
-        $variation = wc_get_product_object('variation', $variant['variation_id']);
-
-        if (!empty($gallery)) {
-            $img_id = array_pop($gallery);
-            $variation->set_image_id($img_id !== 0 ? $img_id : get_option('woocommerce_placeholder_image'));
-        } else {
-            $variation->set_image_id(get_option('woocommerce_placeholder_image'));
-        }
-
-        $variation->save();
-    }
-}
-
 
 /* Update product techs block */
 function add_product_tech_description($product)
@@ -218,17 +195,14 @@ function add_product_tech_description($product)
 
     }
 
-
-
-
     if (empty($block_fields_arr)) {
-        return "Malformed description.";
+        return "Malformed description. Please refer to documentation on how to make description.";
     }
 
     $fields_arr[$sub_fields[1]['name']] = $block_fields_arr;
     $field_key = $acf_fields['key'];
 
-    return update_field($field_key, $fields_arr, $product_id) == false ? "Something went wrong." : true;
+    return update_field($field_key, $fields_arr, $product_id);
 }
 
 function decode_wsklad_desc($start_pos = 0, $desc = '')

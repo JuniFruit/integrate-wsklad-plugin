@@ -4,13 +4,56 @@
 
 defined('ABSPATH') or die('Not allowed!');
 
-add_filter(HOOK_PREFIX . 'get_attributes', 'add_attributes', 10, 2);
-add_filter(HOOK_PREFIX . 'get_categories_ids', 'create_categories_by_path', 20, 2);
+add_filter(HOOK_PREFIX . 'add_attributes', 'add_attributes', 10, 2);
+add_filter(HOOK_PREFIX . 'set_categories', 'create_categories_by_path', 20, 2);
 add_filter(HOOK_PREFIX . 'set_variants', 'set_variants', 10, 2);
-add_filter(HOOK_PREFIX . 'set_variations', 'set_variations', 10);
-add_filter(HOOK_PREFIX . 'set_stock', 'set_stock_for_variations', 10, 2);
 
+/**
+ * Gets products with wsklad_id meta key, returns Wc_Product instances
+ */
 
+function get_wsklad_wc_products($status, $batch) {
+    $args = array(
+        'post_type' => 'product',
+        'post_status' => $status,
+        'numberposts' => $batch,
+        'meta_query' => [
+            [
+            'key' => 'wsklad_id',
+            'compare' => 'EXISTS',
+            ]
+        ]
+    );
+    
+    $posts = get_posts( $args );
+    $wc_instance_products = [];
+
+    if (count($posts) > 0) {
+        foreach ($posts as $post) {
+            $wc_instance = wc_get_product($post->ID);
+            if ($wc_instance) array_push($wc_instance_products, $wc_instance);
+        }
+    }
+
+    return $wc_instance_products;
+}
+
+function get_wsklad_wc_product($status, $wsklad_id) {
+    $args = array(
+        'post_type' => 'product',
+        'post_status' => $status,
+        'meta_query' => [
+            [
+            'key' => 'wsklad_id',
+            'value' => $wsklad_id
+            ]
+        ]
+    );
+    $posts = get_posts( $args );
+    if (count($posts) === 0) return;
+    $wc_instance = wc_get_product($posts[0]->ID);
+    return $wc_instance;
+}
 
 
 /**
@@ -24,7 +67,7 @@ function wh_deleteProducts($force = false, $batch = 10)
 {
 
 
-    $products = wc_get_products(['numberposts' => $batch, 'status' => 'draft']);
+    $products = get_wsklad_wc_products('draft', $batch);
 
     if (empty($products)) {
         return false;
@@ -63,6 +106,7 @@ function wh_deleteProducts($force = false, $batch = 10)
         }
         delete_post_meta($id, 'wsklad_id');
         delete_post_meta($id, 'wsklad_imgs_url');
+        delete_post_meta($id, 'is_wsklad_variation');
         // Delete parent product transients.
         if ($parent_id = wp_get_post_parent_id($id)) {
             wc_delete_product_transients($parent_id);
@@ -113,9 +157,6 @@ function wsklad_request($path, $is_absolute = false)
     }
 
     $response = json_decode($request['body'], true);
-
-    
-
     return $response;
 }
 
@@ -138,10 +179,7 @@ function update_product($product, $item)
 
     if (isset($item['description'])) {
         $desc = $item['description'];
-        $first_sentence_end = strpos($desc, '.');
-        if ($first_sentence_end) {
-            $product->set_short_description(substr($desc, 0, $first_sentence_end));
-        }
+        $product->set_short_description($desc);
         $product->set_description($desc);
     } else {
         $product->set_description('');
@@ -156,55 +194,65 @@ function update_product($product, $item)
     $product->set_status('publish');
     $product->save();
 
-    apply_filters(HOOK_PREFIX . 'get_categories_ids', $product->get_id(), $item['pathName']);
+    apply_filters(HOOK_PREFIX . 'set_categories', $product->get_id(), $item['pathName']);
     if ($item['variantsCount'] > 0) {
-        apply_filters(HOOK_PREFIX . 'get_attributes', $product, $item['id']);
+        apply_filters(HOOK_PREFIX . 'add_attributes', $product, $item['id']);
         // apply_filters(HOOK_PREFIX . 'set_stock', $product, $item['id']);
     } else {
+        update_product_variations_queue($product->get_id()); // put in queue to delete existing variations later
         $product->set_attributes([]);
     }
 
 
+    $product->add_meta_data('wsklad_id', $item['id']);
+
     if ($item['images']['meta']['size'] > 0) {
         do_action(HOOK_PREFIX . 'log', "Found " . $item['images']['meta']['size'] . ' images for '
             . $product->get_name() . ' adding to queue');
-        $product->add_meta_data('wsklad_id', $item['id']);
         $product->add_meta_data('wsklad_imgs_url', $item['images']['meta']['href']);
-        $product->save_meta_data();
+        $product->add_meta_data('is_wsklad_variation', "false");
         update_img_queue($product->get_id());
     } else {
-        delete_post_meta($product->get_id(), 'wsklad_id');
         delete_post_meta($product->get_id(), 'wsklad_imgs_url');
+        delete_post_meta($product->get_id(), 'is_wsklad_variation');
         set_post_thumbnail($product->get_id(), get_option('woocommerce_placeholder_image'));
         $product->set_gallery_image_ids([get_option('woocommerce_placeholder_image')]);
-        $product->save();
-
+        
     }
+    $product->save_meta_data();
     update_acf_fields_queue($product->get_id());
 }
 
 function create_or_update_woo_products($items)
 {
     foreach ($items as $item) {
-        $products = wc_get_products(['slug' => $item['id'], 'status' => 'draft']);
-        $product;
-        if (empty($products)) {
+        $product = get_wsklad_wc_product('draft', $item['id']);
+        
+        if (!$product) {
             do_action(HOOK_PREFIX . 'log', "Couldn't find " . $item['name'] . ". Creating new one...");
             $product = new WC_Product_Variable();
-
             $product->set_slug($item['id']);
-
-        } else {
-            $product = $products[0];
         }
 
-
-        do_action(HOOK_PREFIX . 'log', "Updating product " . $item['name'] . "...");
+        do_action(HOOK_PREFIX . 'log', "Updating product " . $item['name'] . "..." . 'ID: ' . $item['id']);
         update_product($product, $item);
         $product->save();
     }
 }
 
+function delete_product_variations($product) {
+    $variation_ids = $product->get_children();
+
+    if (count($variation_ids) > 0) {
+        foreach ($variation_ids as $variation) {
+            $wc_instance = wc_get_product($variation);
+            if (!$wc_instance) continue;
+            $wc_instance->delete(true);
+            delete_post_meta($variation, 'wsklad_imgs_url');
+            delete_post_meta($variation, 'is_wsklad_variation');
+        } 
+    } 
+}
 
 
 function add_attributes($product, $item_id)
@@ -212,12 +260,13 @@ function add_attributes($product, $item_id)
     $modifications = wsklad_request("/entity/variant?filter=productid=$item_id");
 
     $variants = [];
-
-    if (!$modifications || empty($modifications['rows']))
+    
+    if (!$modifications || empty($modifications['rows'])) {
         return $product;
-
+    }
+    
     do_action(HOOK_PREFIX . 'log', 'Found modifications ' . count($modifications['rows']) . ' for ' . $product->get_name());
-
+    
     # loop through modifications and get all variants names and associate it with their values
     foreach ($modifications['rows'] as $mod) {
         $chars = $mod['characteristics'];
@@ -225,7 +274,7 @@ function add_attributes($product, $item_id)
         foreach ($chars as $var) {
             $name = $var['name'];
             $value = $var['value'];
-
+            
             if (array_key_exists($name, $variants)) {
                 # add only if not in array already
                 if (!in_array($value, $variants[$name])) {
@@ -235,99 +284,118 @@ function add_attributes($product, $item_id)
                 $variants[$name] = [$value];
             }
         }
-
+        
     }
-
+    
     if (empty($variants))
-        return $product;
+    return $product;
 
+    update_product_variations_queue($product->get_id());
     $product = apply_filters(HOOK_PREFIX . 'set_variants', $product, $variants);
-
 
     return $product;
 }
 
-function set_variations($attributes, $product)
-{
-    # We setting only color variations
 
-    do_action(HOOK_PREFIX . 'log', "Setting variations...");
-    $color_attr = null;
-
-    foreach ($attributes as $attr) {
-
-        if ($attr->get_name() === 'pa_czvet') {
-            $color_attr = $attr;
-            break;
-        } else {
-            continue;
-        }
-
+function set_variations_for_product($product, $wsklad_id) {
+    $modifications = wsklad_request("/entity/variant?filter=productid=$wsklad_id");
+    $variations_data = [];
+    
+    if (!$modifications || empty($modifications['rows'])) {
+        do_action(HOOK_PREFIX . 'log', 'Modifications not found'  . ' for ' . $product->get_name());
+        delete_product_variations($product);
+        return $product;
     }
 
-    # Options from wsklad
-    $color_options = [];
-    # Existing product variations
-    $color_variations = [];
-    if ($color_attr) {
-        $color_options = $color_attr->get_options();
-        $variations = $product->get_available_variations();
-        foreach ($variations as $variation) {
-            if (isset($variation['attributes']['attribute_' . $color_attr->get_name()])) {
-                array_push($color_variations, $variation);
+    do_action(HOOK_PREFIX . 'log', "Setting variations for " . $product->get_name() . ' ID: ' . $wsklad_id);
+
+    foreach ($modifications['rows'] as $mod) {
+        $chars = $mod['characteristics'];
+        $name = $mod['name'];
+        $variations_data[$name] = array();
+        $variation_attrs = array();
+        foreach($chars as $characteristic) {
+            $char_name = $characteristic['name'];
+            $char_value = $characteristic['value'];
+            $variation_attrs[$char_name] = $char_value;
+        }
+        $price = $product->get_regular_price();
+        if (count($mod['salePrices']) > 0) {
+            $price = $mod['salePrices'][0]['value'];
+        }
+        $variations_data[$name]['attributes'] = $variation_attrs;
+        $variations_data[$name]['price'] = $price;
+        $stock = get_stock($mod['id']);
+        if (!$stock) {
+            $stock = $product->get_stock_quantity();
+        }
+        $variations_data[$name]['stock'] = $stock;
+        $variations_data[$name]['name'] = $name;
+        $variations_data[$name]['description'] = $mod['description'] ? $mod['description'] : '';
+        $variations_data[$name]['images_count'] =  $mod['images']['meta']['size'];
+        $variations_data[$name]['images_url'] = $mod['images']['meta']['href'];
+    }
+
+    $existing_variations = $product->get_children(); // ids
+    if (count($existing_variations) > 0) {
+        do_action(HOOK_PREFIX . 'log', "Found variations for " . $product->get_name() . ".Updating existing ones...");
+        while (count($existing_variations) > 0) {
+            $current_variation = wc_get_product( array_pop($existing_variations));
+            if (!$current_variation) continue;
+            $new_variation_data = null;
+            if (count($variations_data) > 0) $new_variation_data = array_pop($variations_data);
+            if ($new_variation_data) update_variation_for_product($product, $new_variation_data, $current_variation);
+            if (!$new_variation_data && $current_variation->get_meta('is_wsklad_variation') === "true") {
+                do_action(HOOK_PREFIX . 'log', "Excessive variation exist. Deleting...");
+                $current_variation->delete(true);
             }
         }
-    }
-
-    if (count($color_variations) < 1 && !empty($color_options)) {
-        do_action(HOOK_PREFIX . 'log', "No variations found. Creating variations...");
-        create_variations_for_product($product, $color_attr->get_name(), $color_options);
-        return;
-    }
-
-
-    # Update existing variations if there is a difference delete or create variation
-    do_action(HOOK_PREFIX . 'log', "Updating variations... Found " . count($color_variations));
-
-    foreach ($color_variations as $color_var) {
-        $curr_var = wc_get_product($color_var['variation_id']);
-
-
-        if (!empty($color_options)) {
-            $color_option = array_pop($color_options);
-            $curr_var->set_attributes([$color_attr->get_name() => $color_option]);
-            $curr_var->set_manage_stock(true);
-            $curr_var->set_regular_price($product->get_regular_price());
-            $curr_var->set_stock_quantity($product->get_stock_quantity());
-            $curr_var->set_stock_status($product->get_stock_status());
-            $curr_var->set_sale_price($product->get_sale_price());
-            $curr_var->set_price($product->get_price());
-            $curr_var->save();
-        } else {
-            $curr_var->delete(true);
+        if (count($variations_data) > 0) {
+            do_action(HOOK_PREFIX . 'log', "New variations were found. Creating...");
+            create_variations_for_product($product, $variations_data);
         }
+
+    } else {
+        do_action(HOOK_PREFIX . 'log', "Creating new variations for " . $product->get_name());
+        create_variations_for_product($product, $variations_data);
     }
 
-    if (!empty($color_options)) {
-        create_variations_for_product($product, $color_attr->get_name(), $color_options);
-    }
-    return;
 }
 
-function create_variations_for_product($product, $attr_name, $options)
-{
-    foreach ($options as $option) {
-        $variation = new WC_Product_Variation();
+
+/**
+ * $product = WC_Product
+ * $variation = WC_Product_Variation()
+ */
+
+function update_variation_for_product($product, $variation_data, $variation) {
         $variation->set_parent_id($product->get_id());
         $variation->set_manage_stock(true);
-        $variation->set_attributes(array($attr_name => $option));
-        $variation->set_regular_price($product->get_regular_price());
-        $variation->set_stock_quantity($product->get_stock_quantity());
+        $variation->set_attributes($variation_data['attributes']);
+        $variation->set_regular_price($variation_data['price']);
+        $variation->set_stock_quantity($variation_data['stock']);
         $variation->set_low_stock_amount(0);
-        $variation->set_sale_price($product->get_sale_price());
-        $variation->set_stock_status($product->get_stock_status());
-        $variation->set_price($product->get_price());
+        $variation->set_stock_status($variation_data['stock'] > 0 ? 'instock' : 'outofstock');
+        $variation->set_price($variation_data['price']);
+         if ($variation_data['description']) {
+            $variation->set_description($variation_data['description']);
+            $variation->set_short_description($variation_data['description']);
+        }
         $variation->save();
+
+        update_post_meta($variation->get_id(), 'is_wsklad_variation', "true");
+        if ($variation_data['images_count'] > 0) {
+            update_post_meta($variation->get_id(), 'wsklad_imgs_url', $variation_data['images_url']);
+            update_img_queue($variation->get_id());
+        }
+
+}
+
+function create_variations_for_product($product, $variations)
+{
+    foreach ($variations as $variation_data) {
+        $variation = new WC_Product_Variation();
+        update_variation_for_product($product, $variation_data, $variation);
     }
 
 }
@@ -384,21 +452,6 @@ function set_variants($product, $variants)
     }
 
     $product->set_attributes($attributes);
-    set_variations($attributes, $product);
-    $product->save();
-}
-
-
-function set_stock_for_variations($product, $item_id)
-{
-    $variations = $product->get_available_variations();
-    $stock = intval(get_stock($item_id));
-    $product->set_stock_status($stock > 0 ? 'instock' : 'outofstock'); // 'instock', 'outofstock' or 'onbackorder'
-
-    foreach ($variations as $variation) {
-        wc_update_product_stock($variation['variation_id'], $stock);
-    }
-
     $product->save();
 }
 
@@ -550,24 +603,28 @@ function process_imgs($product, $imgs_url)
     $images = wsklad_request($imgs_url, true);
     if (!$images || empty($images['rows']))
         return;
-
     $img_ids = [];
     foreach ($images['rows'] as $image) {
         do_action(HOOK_PREFIX . 'log', 'Trying to download img for ' . $product->get_name() . ' with size ' . $image['size']);
         $id = updoad_and_attach_img($product->get_id(), $image['filename'], $image['meta']['downloadHref']);
         array_push($img_ids, $id);
     }
-
-    if (!empty($img_ids)) {
-        set_post_thumbnail($product->get_id(), array_shift($img_ids));
-    }
-    if (!empty($img_ids)) {
-        $product->set_gallery_image_ids($img_ids);
-        $product->save();
-    }
-
-
+    return $img_ids;
 }
+
+
+function set_images_for_product($product, $img_ids, $is_set_thumbnail = false) {
+    if (!empty($img_ids) && $is_set_thumbnail) {
+        set_post_thumbnail($product->get_id(), array_shift($img_ids));
+        if (!empty($img_ids)) {
+            $product->set_gallery_image_ids($img_ids);
+        }
+    } else if (!empty($img_ids)) {
+        $product->set_image_id(array_shift($img_ids));
+    }
+    $product->save();
+}
+
 
 function check_exist_image_by_url($img_url)
 {
@@ -587,6 +644,20 @@ function check_exist_image_by_url($img_url)
 
         return $posts[0]->ID;
     }
+}
+
+function update_product_variations_queue($product_id) {
+    $prev = get_option(HOOK_PREFIX . 'product_variations_queue');
+    if ($prev) {
+        array_push($prev, $product_id);
+    } else {
+        $prev = [$product_id];
+    }
+    update_option(HOOK_PREFIX . 'product_variations_queue', $prev);
+}
+
+function clear_product_variations_queue() {
+    update_option(HOOK_PREFIX . 'product_variations_queue', []);
 }
 
 function update_img_queue($product_id)

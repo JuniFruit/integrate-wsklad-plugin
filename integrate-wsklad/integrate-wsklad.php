@@ -17,7 +17,7 @@ defined('ABSPATH') or die('Not allowed!');
 define('PLUGIN_PATH', plugin_dir_path(__FILE__));
 define('PLUGIN_URL', plugin_dir_url(__FILE__));
 define('HOOK_PREFIX', 'integrate_wsklad_');
-define('PRODUCT_BATCH', intval(get_option('integrate_wsklad_product_batch'))); // how many products we process at once
+define('PRODUCT_BATCH', get_option('integrate_wsklad_product_batch') ? intval(get_option('integrate_wsklad_product_batch')) : 50); // how many products we process at once
 
 add_action('woocommerce_init', 'plugin_init');
 add_action('admin_post_integrate_wsklad_sync', 'integrate_wsklad_sync', 5, 2);
@@ -26,9 +26,9 @@ add_action(HOOK_PREFIX . 'update_products', 'process_products', 10, 1);
 add_action(HOOK_PREFIX . 'log', 'add_log', 10, 1);
 add_action(HOOK_PREFIX . 'upload_imgs', 'upload_imgs', 10, 1);
 add_action(HOOK_PREFIX . 'update_acf', 'update_acf', 10, 1);
+add_action(HOOK_PREFIX . 'update_variations', 'update_variations', 10, 1);
 add_action(HOOK_PREFIX . 'unpublish_products', 'unpublish_current_products', 10, 1);
 add_filter('plugin_action_links_' . plugin_basename(__FILE__), 'settings_link');
-
 
 
 function settings_link($links)
@@ -69,11 +69,11 @@ function execute_sync_step($step_num = 0, $params, $execute_now = false) {
     $steps = [
         0 => 'Unpublish products',
         1 => 'Update products',
-        2 => 'Load images',
-        3 => 'Fill ACF fields for products',
-        4 => 'Delete draft products'
+        2 => 'Update product variations',
+        3 => 'Load images',
+        4 => 'Fill ACF fields for products',
+        5 => 'Delete draft products'
     ];
-    do_action(HOOK_PREFIX . 'log', 'Executing step: ' . $steps[$step_num]);
     $action_message = $execute_now ? 'Started action:' : 'Scheduled action:';
     do_action(HOOK_PREFIX . 'log', $action_message . " " . $steps[$step_num]);
     
@@ -87,14 +87,18 @@ function execute_sync_step($step_num = 0, $params, $execute_now = false) {
             as_schedule_single_action(time(), HOOK_PREFIX . 'update_products',$params);
             break;
         case 2:
+             if ($execute_now) return do_action(HOOK_PREFIX . 'update_variations', $params);
+            as_schedule_single_action(time(), HOOK_PREFIX . 'update_variations', $params);
+            break;
+        case 3:
              if ($execute_now) return do_action(HOOK_PREFIX . 'upload_imgs', $params);
             as_schedule_single_action(time(), HOOK_PREFIX . 'upload_imgs', $params);
             break;
-        case 3:
+        case 4:
              if ($execute_now) return do_action(HOOK_PREFIX . 'update_acf', $params);
             as_schedule_single_action(time(), HOOK_PREFIX . 'update_acf',$params);
             break;
-        case 4:
+        case 5:
              if ($execute_now) return do_action(HOOK_PREFIX . 'delete_current_products', $params);
             as_schedule_single_action(time(), HOOK_PREFIX . 'delete_current_products', $params);
             break;
@@ -133,7 +137,7 @@ function integrate_wsklad_sync()
     wp_redirect(admin_url('options-general.php?page=integrate_wsklad_plugin'));
     clear_img_queue();
     clear_acf_fields_queue();
-
+    clear_product_variations_queue();
     if (get_option(HOOK_PREFIX . 'sync') == 'running') {
         do_action(HOOK_PREFIX . 'log', "Sync was manually stopped.");
         clear_all_scheduled_hooks();
@@ -152,8 +156,9 @@ function integrate_wsklad_sync()
 
 function unpublish_current_products($batch)
 {
+    require_once PLUGIN_PATH . 'includes/functions.php';
     do_action(HOOK_PREFIX . 'log', "Function unpublish_current_products started");
-    $products = wc_get_products(['status' => 'publish', 'numberposts' => $batch]);
+    $products = get_wsklad_wc_products('publish', $batch);
 
     if (empty($products)) {
         do_action(HOOK_PREFIX . 'log', 'No products to unpublish, skipping this step.');
@@ -161,16 +166,16 @@ function unpublish_current_products($batch)
         return ['result' => 'finished'];
 
     }
-    $i = 0;
+    $done = 0;
     foreach ($products as $product) {
         $product->set_status('draft');
         $product->save();
-        $i += 1;
+        $done += 1;
     }
 
-    if (!empty(wc_get_products(['status' => 'publish', 'numberposts' => $batch]))) {
+    if ($done >= $batch && $done !== 0) {
 
-        do_action(HOOK_PREFIX . 'log', 'Continue unpublishing.');
+        do_action(HOOK_PREFIX . 'log', 'Continue unpublishing...');
         execute_sync_step(0, array(PRODUCT_BATCH));
 
     } else {
@@ -200,12 +205,13 @@ function delete_woo_products($force = true)
     if (!$is_more_entries) {
         clear_img_queue();
         clear_acf_fields_queue();
+        clear_product_variations_queue();
         do_action(HOOK_PREFIX . 'log', "Finished deleting products. Sync successfully finished.");
         update_option(HOOK_PREFIX . 'sync', 'stopped');
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(4, array($force));
+    execute_sync_step(5, array($force));
 }
 
 
@@ -224,17 +230,18 @@ function process_products($offset = 0)
     $wsklad_total_count = $wsklad_products['meta']['size'];
 
     if (!$wsklad_products || empty($wsklad_products['rows'])) {
-        do_action(HOOK_PREFIX . 'log', "No products returned from WSKLAD. Skip to loading images now.");
-        execute_sync_step(2,  get_option(HOOK_PREFIX . 'img_queue'), true);
+        do_action(HOOK_PREFIX . 'log', "No products returned from WSKLAD. Skip to updating variations now.");
+        execute_sync_step(2,  get_option(HOOK_PREFIX . 'product_variations_queue'), true);
         return ['result' => 'finished'];
     }
 
     create_or_update_woo_products($wsklad_products['rows']);
     $done = $offset + count($wsklad_products['rows']);
+
     do_action(HOOK_PREFIX . 'log', 'Processing items. Done: ' . $done);
     // If returned count is less then batch then we can proceed with next step
     if ($done >= $wsklad_total_count) {
-        execute_sync_step(2, array(get_option(HOOK_PREFIX . 'img_queue')));
+        execute_sync_step(2, array(get_option(HOOK_PREFIX . 'product_variations_queue')));
         return ['result' => 'finished'];
     }
     execute_sync_step(1, array($offset + $batch)); // fetch next batch of products recursive
@@ -261,24 +268,25 @@ function upload_imgs($queue = [])
     } else {
         $q = array_splice($queue, 0);
     }
-    $_pf = new WC_Product_Factory();
     foreach ($q as $product_id) {
-        // $product = $_pf->get_product($product_id);
         $product = wc_get_product($product_id);
+        $product_img_url = $product->get_meta('wsklad_imgs_url');
+        $is_variation = $product->get_meta('is_wsklad_variation') === "true";
 
         if ($product) {
-            process_imgs($product, $product->get_meta('wsklad_imgs_url'));
+            $img_ids = process_imgs($product, $product_img_url);
+            set_images_for_product($product, $img_ids, !$is_variation);
         }
 
     }
 
     if (empty($queue)) {
         do_action(HOOK_PREFIX . 'log', "No products have images. Skip to fill ACF fields now");
-        execute_sync_step(3, array(get_option(HOOK_PREFIX . 'acf_fields_queue')));
+        execute_sync_step(4, array(get_option(HOOK_PREFIX . 'acf_fields_queue')));
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(2, array($queue));
+    execute_sync_step(3, array($queue));
     return ['result' => 'restart'];
 }
 
@@ -302,9 +310,7 @@ function update_acf($queue = [])
     } else {
         $q = array_splice($queue, 0);
     }
-    $_pf = new WC_Product_Factory();
     foreach ($q as $product_id) {
-        // $product = $_pf->get_product($product_id);
         $product = wc_get_product($product_id);
 
         if ($product) {
@@ -315,11 +321,50 @@ function update_acf($queue = [])
 
     if (empty($queue)) {
         do_action(HOOK_PREFIX . 'log', "No products left. Starting to look for products to delete.");
-        execute_sync_step(4, array(true));
+        execute_sync_step(5, array(true));
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(3, array($queue));
+    execute_sync_step(4, array($queue));
+}
+
+function update_variations($queue = []) {
+    do_action(HOOK_PREFIX . 'log', "Function update_variations started");
+
+    if (get_option(HOOK_PREFIX . 'sync') == 'stopped') {
+        do_action(HOOK_PREFIX . 'log', "Sync was stopped. Stop hook execution.");
+        update_option(HOOK_PREFIX . 'sync', 'stopped');
+        return ['result' => 'finished'];
+    }
+
+    require_once PLUGIN_PATH . 'includes/functions.php';
+    # How many products we be processing at once
+    $batch = 20; // it's an optimal value, it's bigger it's getting stuck
+
+    $q = [];
+    if (count($queue) > $batch) {
+        $q = array_splice($queue, 0, $batch);
+    } else {
+        $q = array_splice($queue, 0);
+    }
+    foreach ($q as $product_id) {
+        $product = wc_get_product($product_id);
+        $wsklad_id = $product->get_meta('wsklad_id');
+        if ($product) {
+            set_variations_for_product($product, $wsklad_id);
+        }
+
+    }
+
+    if (empty($queue)) {
+        do_action(HOOK_PREFIX . 'log', "No products have variations. Skip to images now");
+        execute_sync_step(3, array(get_option(HOOK_PREFIX . 'img_queue')));
+        return ['result' => 'finished'];
+    }
+
+    execute_sync_step(2, array($queue));
+    return ['result' => 'restart'];
+
 }
 
 
@@ -329,6 +374,7 @@ function clear_all_scheduled_hooks()
     as_unschedule_all_actions(HOOK_PREFIX . 'delete_current_products');
     as_unschedule_all_actions(HOOK_PREFIX . 'upload_imgs');
     as_unschedule_all_actions(HOOK_PREFIX . 'update_acf');
+    as_unschedule_all_actions(HOOK_PREFIX . 'update_variations');
 }
 
 
