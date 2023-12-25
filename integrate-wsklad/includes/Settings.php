@@ -95,7 +95,7 @@ class SettingsInit
 
             <h2>Managing</h2>
 
-            <h4> Sync may take a while. Do not try to stop it early. All Woocommerce draft products will be deleted. </h4>
+            <h4> Sync may take a while. Do not try to stop it early. To update debug log restart the page </h4>
 
 
 
