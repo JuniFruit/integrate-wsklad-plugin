@@ -237,7 +237,6 @@ function process_products($offset = 0)
 
     create_or_update_woo_products($wsklad_products['rows']);
     $done = $offset + count($wsklad_products['rows']);
-
     do_action(HOOK_PREFIX . 'log', 'Processing items. Done: ' . $done);
     // If returned count is less then batch then we can proceed with next step
     if ($done >= $wsklad_total_count) {

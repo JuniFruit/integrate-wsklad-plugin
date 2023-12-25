@@ -296,6 +296,16 @@ function add_attributes($product, $item_id)
     return $product;
 }
 
+function find_term_slug($attr_slug, $value_name) {
+    $terms = get_terms( array(
+        'taxonomy'   => 'pa_' . $attr_slug,
+        'hide_empty' => false,
+    ) );
+    if (count($terms) === 0) return $value_name;
+    $term_slugs = wp_list_pluck($terms, 'slug', 'name');
+    return $term_slugs[$value_name] ? $term_slugs[$value_name] : $value_name;
+}
+
 
 function set_variations_for_product($product, $wsklad_id) {
     $modifications = wsklad_request("/entity/variant?filter=productid=$wsklad_id");
@@ -307,8 +317,10 @@ function set_variations_for_product($product, $wsklad_id) {
         return $product;
     }
 
+    $existingTaxes = wc_get_attribute_taxonomies();
+    $attribute_labels = wp_list_pluck($existingTaxes, 'attribute_label', 'attribute_name');
     do_action(HOOK_PREFIX . 'log', "Setting variations for " . $product->get_name() . ' ID: ' . $wsklad_id);
-
+    
     foreach ($modifications['rows'] as $mod) {
         $chars = $mod['characteristics'];
         $name = $mod['name'];
@@ -317,7 +329,10 @@ function set_variations_for_product($product, $wsklad_id) {
         foreach($chars as $characteristic) {
             $char_name = $characteristic['name'];
             $char_value = $characteristic['value'];
-            $variation_attrs[$char_name] = $char_value;
+            $attr_name_slug = array_search($char_name, $attribute_labels, true);
+            $attr_value_slug = find_term_slug($attr_name_slug, $char_value);
+            // variation requires [attribute_pa_ + slug => term slug]
+            $variation_attrs['attribute_pa_' . $attr_name_slug] = $attr_value_slug;
         }
         $price = $product->get_regular_price();
         if (count($mod['salePrices']) > 0) {
@@ -686,7 +701,7 @@ function create_global_attribute($name, $slug)
         return wc_attribute_taxonomy_id_by_name($slug);
     }
 
-    do_action(HOOK_PREFIX . 'log', 'Creating a new Taxonomy ' . $taxonomy_name . ' with slug ' . '$slug');
+    do_action(HOOK_PREFIX . 'log', 'Creating a new Taxonomy ' . $taxonomy_name . ' with slug ' . $slug);
     $attribute_id = wc_create_attribute(
         array(
             'name' => $name,
