@@ -96,17 +96,15 @@ class SettingsInit
 
 
 
-            <form method="post" action="admin-post.php" novalidate="novalidate">
+            <form onsubmit="document.getElementById('syncButton').setAttribute('disabled', true); return true;" method="post" action="admin-post.php" novalidate="novalidate">
                 <input type="hidden" name="action" value="integrate_wsklad_sync"></input>
-
-
-                <button id="syncButton" type="submit">
+                <button  id="syncButton" type="submit">
                     <?php echo get_option(HOOK_PREFIX . 'sync') == 'running' ? 'Stop sync' : 'Start sync' ?>
                 </button>
             </form>
-            <form method="post" action="admin-post.php" novalidate="novalidate">
+            <form onsubmit="document.getElementById('continueButton').setAttribute('disabled', true); return true;" method="post" action="admin-post.php" novalidate="novalidate">
                 <input type="hidden" name="action" value="integrate_wsklad_continue_sync"></input>
-                <button style="margin-top:.85rem;" type="submit" <?php echo get_option(HOOK_PREFIX . 'sync') === 'running' || !get_option(HOOK_PREFIX . 'sync_step') ? "disabled" : "" ?>>
+                <button id="continueButton" style="margin-top:.85rem;" type="submit" <?php echo get_option(HOOK_PREFIX . 'sync') === 'running' || !get_option(HOOK_PREFIX . 'sync_step') ? "disabled" : "" ?>>
                     Continue sync
                 </button>
             </form>

@@ -67,18 +67,22 @@ function get_wsklad_wc_product($status, $wsklad_id) {
 function wh_deleteProducts($force = false, $batch = 10)
 {
 
-
+    $done = 0;
     $products = get_wsklad_wc_products('draft', $batch);
+    $stop_timestamp = set_execution_timer();
 
     if (empty($products)) {
-        return false;
+        return $done;
     }
 
     foreach ($products as $product) {
+        if (check_if_timeout($stop_timestamp)) break;
+
         delete_single_product($product, $force);
+        $done += 1;
     }
 
-    return true;
+    return $done;
 }
 
 function delete_single_product($product, $force) {
@@ -172,8 +176,9 @@ function update_product($product, $item)
 
     if (!empty($item['salePrices'])) {
         $prices = $item['salePrices'];
-        $product->set_price($prices[0]['value']);
-        $product->set_regular_price($prices[0]['value']);
+        $transformed_price = transform_wsklad_price($prices[0]['value']);
+        $product->set_price($transformed_price);
+        $product->set_regular_price($transformed_price);
     } else {
         $product->set_regular_price(0);
         $product->set_price(0);
@@ -222,7 +227,10 @@ function update_product($product, $item)
 
 function create_or_update_woo_products($items)
 {
+    $done = 0;
+    $stop_timestamp = set_execution_timer();
     foreach ($items as $item) {
+        if (check_if_timeout($stop_timestamp)) break;
         do_action(HOOK_PREFIX . 'log', "Updating product " . $item['name'] . "..." . 'ID: ' . $item['id']);
 
         $product = get_wsklad_wc_product('draft', $item['id']);
@@ -230,6 +238,7 @@ function create_or_update_woo_products($items)
         $new_product = $product;
 
         if (!$product) {
+            do_action(HOOK_PREFIX . 'log', "Not found creating new one...");
             $new_product = $has_modifications ? new WC_Product_Variable() : new WC_Product_Simple();
         }
 
@@ -248,7 +257,9 @@ function create_or_update_woo_products($items)
 
         update_product($new_product, $item);
         $new_product->save();
+        $done += 1;
     }
+    return $done;
 }
 
 function delete_product_variations($product) {
@@ -341,7 +352,7 @@ function set_variations_for_product($product, $wsklad_id) {
         }
         $price = $product->get_regular_price();
         if (count($mod['salePrices']) > 0) {
-            $price = $mod['salePrices'][0]['value'];
+            $price = transform_wsklad_price($mod['salePrices'][0]['value']);
         }
         $variations_data[$name]['attributes'] = $variation_attrs;
         $variations_data[$name]['price'] = $price;
@@ -475,11 +486,11 @@ function set_variants($product, $variants)
     $product->save();
 }
 
-function get_stock($wsklad_id)
+function get_stock($assortment_id)
 {
-    $data = wsklad_request('/report/stock/bystore/current?filter=assortmentId=' . $wsklad_id);
+    $data = wsklad_request('/report/stock/all/current?filter=assortmentId=' . $assortment_id);
 
-    $total = 0.0;
+    $total = 0;
 
     if (!$data || empty($data))
         return $total;

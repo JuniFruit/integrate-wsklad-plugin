@@ -16,6 +16,37 @@ function update_queue($queue_name, $product_id)
     update_option($queue_name, $prev);
 }
 
+function transform_wsklad_price($price) {
+    $price_float = floatval($price / 100);
+    return round($price_float, 2);
+}
+
+/**
+ * @param stop accepts when to stop in secs
+ * returns stop timestamp
+ */
+function set_execution_timer($stop = 100) {
+    $date = new DateTime();
+    $stop_timestamp =  $date->add(new DateInterval('PT' . $stop . 'S'))->getTimestamp();
+    return $stop_timestamp;
+}
+
+/**
+ * @param stop_timestamp accepts timestamp when to stop
+ * returns boolean 
+ */
+
+function check_if_timeout($stop_timestamp) {
+    $current = new DateTime();
+    $t1 = $current->getTimestamp();
+    if ($t1 >= $stop_timestamp) {
+        do_action(HOOK_PREFIX . 'log', "Timed out, scheduling another step...");
+        return true;
+    }
+
+    return false;
+}
+
 function clear_all_queues()
 {
 
@@ -35,16 +66,15 @@ function clear_all_scheduled_hooks()
     as_unschedule_all_actions(HOOK_PREFIX . 'update_variations');
 }
 
-function splice_queue($queue, $splice_by) {
+function default_queue_array($queue) {
 
     $result_queue = [];
 
-    if (count($queue) > $splice_by) {
-        $result_queue = array_splice($queue, 0, $splice_by);
-    } else {
-        $result_queue = array_splice($queue, 0);
-    }
-    return ['spliced' => $result_queue, 'remained' => $queue];
+    if (!empty($queue)) {
+        $result_queue = array_slice($queue, 0);
+    } 
+    
+    return $result_queue;
 }
 
 function is_sync_stopped() {

@@ -220,7 +220,9 @@ function unpublish_current_products($batch)
         return ['result' => 'finished'];
     }
     $done = 0;
+    $stop_timestamp = set_execution_timer();
     foreach ($products as $product) {
+        if (check_if_timeout($stop_timestamp)) break;
         $product->set_status('draft');
         $product->save();
         $done += 1;
@@ -253,16 +255,16 @@ function process_products($offset = 0)
         execute_sync_step(2,  get_option(ATTRIBUTES_QUEUE), true);
         return ['result' => 'finished'];
     }
-
-    create_or_update_woo_products($wsklad_products['rows']);
-    $done = $offset + count($wsklad_products['rows']);
-    do_action(HOOK_PREFIX . 'log', 'Processing items. Done: ' . $done);
+    $done_processing = create_or_update_woo_products($wsklad_products['rows']);
+    $done_total = $offset + $done_processing;
+  
+    do_action(HOOK_PREFIX . 'log', 'Processing items. Done: ' . $done_total);
     // If returned count is less then batch then we can proceed with next step
-    if ($done >= $wsklad_total_count) {
+    if ($done_total >= $wsklad_total_count) {
         execute_sync_step(2, array(get_option(ATTRIBUTES_QUEUE)));
         return ['result' => 'finished'];
     }
-    execute_sync_step(1, array($offset + $batch)); // fetch next batch of products recursive
+    execute_sync_step(1, array($offset + $done_processing)); // fetch next batch of products recursive
 }
 
 function process_attributes($queue = []) {
@@ -270,26 +272,30 @@ function process_attributes($queue = []) {
     if (is_sync_stopped()) return ['result' => 'finished'];
     
     $batch = PRODUCT_BATCH;
-    
-    $result = splice_queue($queue, $batch);
- 
-    
-    foreach ($result['spliced'] as $_v => $product_id) {
-        
+    $ids = default_queue_array($queue);
+    $done = 0;
+    $stop_timestamp = set_execution_timer();
+
+    while (count($ids) > 0) {
+        if ($done >= $batch) break;
+        if (check_if_timeout($stop_timestamp)) break;
+        $product_id = array_shift($ids);
+
         $product = wc_get_product($product_id);
         $wsklad_id = $product->get_meta('wsklad_id');
         if ($product) {
             add_attributes($product, $wsklad_id);
         }
+        $done += 1;
     }
 
-    if (empty($result['remained'])) {
+    if (empty($ids)) {
         do_action(HOOK_PREFIX . 'log', "No products left. Starting to update variations.");
         execute_sync_step(3, array(get_option(VARIATIONS_QUEUE)));
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(2, array($result['remained']));
+    execute_sync_step(2, array($ids));
 }
 
 function update_variations($queue = [])
@@ -301,23 +307,30 @@ function update_variations($queue = [])
     # How many products we be processing at once
     $batch = PRODUCT_BATCH; // it's an optimal value, it's bigger it's getting stuck
 
-    $result = splice_queue($queue, $batch);
+    $ids = default_queue_array($queue);
+    $done = 0;
+    $stop_timestamp = set_execution_timer();
 
-    foreach ($result['spliced'] as $_v => $product_id) {
+    while (count($ids) > 0) {
+        if ($done >= $batch) break;
+        if (check_if_timeout($stop_timestamp)) break;
+        $product_id = array_shift($ids);
+
         $product = wc_get_product($product_id);
         $wsklad_id = $product->get_meta('wsklad_id');
         if ($product) {
             set_variations_for_product($product, $wsklad_id);
         }
+        $done += 1;
     }
 
-    if (empty($result['remained'])) {
+    if (empty($ids)) {
         do_action(HOOK_PREFIX . 'log', "No products have variations. Skip to images now");
         execute_sync_step(4, array(get_option(IMAGES_QUEUE)));
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(3, array($result['remained']));
+    execute_sync_step(3, array($ids));
     return ['result' => 'restart'];
 }
 
@@ -330,9 +343,15 @@ function upload_imgs($queue = [])
     # How many products we be processing at once
     $batch = PRODUCT_BATCH;
 
-    $result = splice_queue($queue, $batch);
+    $ids = default_queue_array($queue);
+    $done = 0;
+    $stop_timestamp = set_execution_timer();
 
-    foreach ($result['spliced'] as $_v => $product_id) {
+    while (count($ids) > 0) {
+        if ($done >= $batch) break;
+        if (check_if_timeout($stop_timestamp)) break;
+        $product_id = array_shift($ids);
+
         $product = wc_get_product($product_id);
         $product_img_url = $product->get_meta('wsklad_imgs_url');
         $is_variation = $product->get_meta('is_wsklad_variation') === "true";
@@ -341,15 +360,16 @@ function upload_imgs($queue = [])
             $img_ids = process_imgs($product, $product_img_url);
             set_images_for_product($product, $img_ids, !$is_variation);
         }
+        $done += 1;
     }
 
-    if (empty($result['remained'])) {
+    if (empty($ids)) {
         do_action(HOOK_PREFIX . 'log', "No products have images. Skip to fill ACF fields now");
         execute_sync_step(5, array(get_option(ACF_QUEUE)));
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(4, array($result['remained']));
+    execute_sync_step(4, array($ids));
     return ['result' => 'restart'];
 }
 
@@ -361,23 +381,30 @@ function update_acf($queue = [])
 
     $batch = PRODUCT_BATCH;
 
-    $result = splice_queue($queue, $batch);
+    $ids = default_queue_array($queue);
+    $done = 0;
+    $stop_timestamp = set_execution_timer();
 
-    foreach ($result['spliced'] as $_v => $product_id) {
+    while (count($ids) > 0) {
+        if ($done >= $batch) break;
+        if (check_if_timeout($stop_timestamp)) break;
+
+        $product_id = array_shift($ids);
         $product = wc_get_product($product_id);
 
         if ($product) {
             add_acf_fields($product);
         }
+        $done += 1;
     }
 
-    if (empty($result['remained'])) {
+    if (empty($ids)) {
         do_action(HOOK_PREFIX . 'log', "No products left. Starting to look for products to delete.");
         execute_sync_step(6, array(true));
         return ['result' => 'finished'];
     }
 
-    execute_sync_step(5, array($result['remained']));
+    execute_sync_step(5, array($ids));
 }
 
 
@@ -389,9 +416,9 @@ function delete_woo_products($force = true)
 
     $batch = PRODUCT_BATCH; # Delete per hook execution
 
-    $is_more_entries = wh_deleteProducts($force, $batch);
+    $done = wh_deleteProducts($force, $batch);
 
-    if (!$is_more_entries) {
+    if ($done === 0) {
         clear_all_queues();
         do_action(HOOK_PREFIX . 'log', "Finished deleting products. Sync successfully finished.");
         update_option(HOOK_PREFIX . 'sync', 'stopped');
