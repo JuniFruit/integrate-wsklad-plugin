@@ -246,21 +246,4 @@ function get_images_from_product($product)
 }
 
 
-function update_acf_fields_queue($product_id)
-{
-
-    $prev = get_option(HOOK_PREFIX . 'acf_fields_queue');
-    if ($prev) {
-        array_push($prev, $product_id);
-    } else {
-        $prev = [$product_id];
-    }
-    update_option(HOOK_PREFIX . 'acf_fields_queue', $prev);
-}
-
-function clear_acf_fields_queue()
-{
-    update_option(HOOK_PREFIX . 'acf_fields_queue', []);
-}
-
 ?>

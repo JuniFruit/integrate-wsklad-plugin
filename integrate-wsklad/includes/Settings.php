@@ -7,14 +7,12 @@ class SettingsInit
 {
     public function __construct()
     {
-
     }
 
     public function start()
     {
         add_action('admin_menu', [$this, 'addSettingsPage']);
         add_action('admin_init', [$this, 'registerSettings']);
-
     }
 
     public function activate()
@@ -22,11 +20,12 @@ class SettingsInit
         // Code to execute on activation.
         add_option(HOOK_PREFIX . 'sync', 'stopped');
         add_option(HOOK_PREFIX . 'img_queue', array());
+        add_option(HOOK_PREFIX . 'product_attributes_queue', array());
         add_option(HOOK_PREFIX . 'product_variations_queue', array());
         add_option(HOOK_PREFIX . 'acf_fields_queue', array());
         add_option(HOOK_PREFIX . 'debug_log', array());
         add_option(HOOK_PREFIX . 'product_batch', 50);
-
+        add_option(HOOK_PREFIX . 'sync_step', NULL);
     }
 
     public function deactivate()
@@ -34,9 +33,11 @@ class SettingsInit
         delete_option(HOOK_PREFIX . 'sync');
         delete_option(HOOK_PREFIX . 'img_queue');
         delete_option(HOOK_PREFIX . 'product_variations_queue');
+        delete_option(HOOK_PREFIX . 'product_attributes_queue');
         delete_option(HOOK_PREFIX . 'acf_fields_queue');
         delete_option(HOOK_PREFIX . 'debug_log');
         delete_option(HOOK_PREFIX . 'product_batch');
+        delete_option(HOOK_PREFIX . 'sync_step');
     }
 
     public function addSettingsPage()
@@ -52,7 +53,7 @@ class SettingsInit
 
     public function renderSettingsPage()
     {
-        ?>
+?>
         <div class="wrap">
             <h2>Integrate WSKLAD</h2>
             <form method="post" action="options.php">
@@ -61,18 +62,15 @@ class SettingsInit
                 <table class="form-table">
                     <tr valign="top">
                         <th scope="row">WSKLAD Login:</th>
-                        <td><input type="text" name="integrate_wsklad_login" required
-                                value="<?php echo esc_attr(get_option('integrate_wsklad_login')); ?>" /></td>
+                        <td><input type="text" name="integrate_wsklad_login" required value="<?php echo esc_attr(get_option('integrate_wsklad_login')); ?>" /></td>
                     </tr>
                     <tr valign="top">
                         <th scope="row">WSKLAD Password:</th>
-                        <td><input type="password" name="integrate_wsklad_password" required
-                                value="<?php echo esc_attr(get_option('integrate_wsklad_password')); ?>" /></td>
+                        <td><input type="password" name="integrate_wsklad_password" required value="<?php echo esc_attr(get_option('integrate_wsklad_password')); ?>" /></td>
                     </tr>
                     <tr valign="top">
                         <th scope="row">Pic download reroute server endpoint (optional):</th>
-                        <td><input type="text" name="integrate_wsklad_reroute_server"
-                                value="<?php echo esc_attr(get_option('integrate_wsklad_reroute_server')); ?>" /></td>
+                        <td><input type="text" name="integrate_wsklad_reroute_server" value="<?php echo esc_attr(get_option('integrate_wsklad_reroute_server')); ?>" /></td>
                     </tr>
                     <tr valign="top">
                         <td>
@@ -84,8 +82,7 @@ class SettingsInit
                     </tr>
                     <tr valign="top">
                         <th scope="row">Products per hook:</th>
-                        <td><input type="number" name="integrate_wsklad_product_batch" min="0"
-                                value="<?php echo esc_attr(get_option('integrate_wsklad_product_batch')); ?>" /></td>
+                        <td><input type="number" name="integrate_wsklad_product_batch" min="0" value="<?php echo esc_attr(get_option('integrate_wsklad_product_batch')); ?>" /></td>
                     </tr>
 
 
@@ -107,26 +104,31 @@ class SettingsInit
                     <?php echo get_option(HOOK_PREFIX . 'sync') == 'running' ? 'Stop sync' : 'Start sync' ?>
                 </button>
             </form>
+            <form method="post" action="admin-post.php" novalidate="novalidate">
+                <input type="hidden" name="action" value="integrate_wsklad_continue_sync"></input>
+                <button style="margin-top:.85rem;" type="submit" <?php echo get_option(HOOK_PREFIX . 'sync') === 'running' || !get_option(HOOK_PREFIX . 'sync_step') ? "disabled" : "" ?>>
+                    Continue sync
+                </button>
+            </form>
 
             <h2>Debug Log</h2>
 
             <div style="width:60rem;height:40rem;overflow-y:scroll;overflow-x:scroll;border:2px solid rgba(0,0,0,0.4);">
-                <pre> 
+                <pre>
                     <?php $debug_log = get_option(HOOK_PREFIX . 'debug_log');
                     if (!$debug_log || gettype($debug_log) !== 'array') {
-                        echo 'No messages in log'; 
-                        return; 
+                        echo 'No messages in log';
+                        return;
                     }
-                    foreach ($debug_log as $c_key => $c_value) 
-                            {
-                               echo $c_value . "\n";
-                            } 
+                    foreach ($debug_log as $c_key => $c_value) {
+                        echo $c_value . "\n";
+                    }
                     ?> 
                 </pre>
             </div>
 
         </div>
-        <?php
+<?php
     }
 
     public function registerSettings()
@@ -135,10 +137,7 @@ class SettingsInit
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'password');
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'reroute_server');
         register_setting(HOOK_PREFIX . 'plugin_options', HOOK_PREFIX . 'product_batch');
-
     }
-
-
 }
 
 

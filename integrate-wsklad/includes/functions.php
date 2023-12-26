@@ -4,9 +4,10 @@
 
 defined('ABSPATH') or die('Not allowed!');
 
-add_filter(HOOK_PREFIX . 'add_attributes', 'add_attributes', 10, 2);
 add_filter(HOOK_PREFIX . 'set_categories', 'create_categories_by_path', 20, 2);
 add_filter(HOOK_PREFIX . 'set_variants', 'set_variants', 10, 2);
+
+require_once PLUGIN_PATH . 'utils.php';
 
 /**
  * Gets products with wsklad_id meta key, returns Wc_Product instances
@@ -74,46 +75,50 @@ function wh_deleteProducts($force = false, $batch = 10)
     }
 
     foreach ($products as $product) {
-        $id = $product->get_id();
-
-        do_action(HOOK_PREFIX . 'log', 'Deleting ' . $product->get_name());
-
-        // If we're forcing, then delete permanently.
-        if ($force) {
-            if ($product->is_type('variable')) {
-                foreach ($product->get_children() as $child_id) {
-                    $child = wc_get_product($child_id);
-                    $child->delete(true);
-                }
-            } elseif ($product->is_type('grouped')) {
-                foreach ($product->get_children() as $child_id) {
-                    $child = wc_get_product($child_id);
-                    $child->set_parent_id(0);
-                    $child->save();
-                }
-            }
-
-            $product->delete(true);
-            $result = $product->get_id() > 0 ? false : true;
-        } else {
-            $product->delete();
-            $result = 'trash' === $product->get_status();
-        }
-
-        if (!$result) {
-            do_action(HOOK_PREFIX . 'log', 'Product ' . $product->get_name() . ' cannot be deleted');
-            continue;
-        }
-        delete_post_meta($id, 'wsklad_id');
-        delete_post_meta($id, 'wsklad_imgs_url');
-        delete_post_meta($id, 'is_wsklad_variation');
-        // Delete parent product transients.
-        if ($parent_id = wp_get_post_parent_id($id)) {
-            wc_delete_product_transients($parent_id);
-        }
+        delete_single_product($product, $force);
     }
 
     return true;
+}
+
+function delete_single_product($product, $force) {
+    $id = $product->get_id();
+
+    do_action(HOOK_PREFIX . 'log', 'Deleting ' . $product->get_name());
+
+    // If we're forcing, then delete permanently.
+    if ($force) {
+        if ($product->is_type('variable')) {
+            foreach ($product->get_children() as $child_id) {
+                $child = wc_get_product($child_id);
+                $child->delete(true);
+            }
+        } elseif ($product->is_type('grouped')) {
+            foreach ($product->get_children() as $child_id) {
+                $child = wc_get_product($child_id);
+                $child->set_parent_id(0);
+                $child->save();
+            }
+        }
+
+        $product->delete(true);
+        $result = $product->get_id() > 0 ? false : true;
+    } else {
+        $product->delete();
+        $result = 'trash' === $product->get_status();
+    }
+
+    if (!$result) {
+        do_action(HOOK_PREFIX . 'log', 'Product ' . $product->get_name() . ' cannot be deleted');
+        return;
+    }
+    delete_post_meta($id, 'wsklad_id');
+    delete_post_meta($id, 'wsklad_imgs_url');
+    delete_post_meta($id, 'is_wsklad_variation');
+    // Delete parent product transients.
+    if ($parent_id = wp_get_post_parent_id($id)) {
+        wc_delete_product_transients($parent_id);
+    }
 }
 
 /**
@@ -162,19 +167,16 @@ function wsklad_request($path, $is_absolute = false)
 
 function update_product($product, $item)
 {
-    require_once PLUGIN_PATH . 'includes/acf_funcs.php';
+
     $product->set_name($item['name']); // product title
 
-
-    $product->set_price($item['minPrice']['value']);
     if (!empty($item['salePrices'])) {
         $prices = $item['salePrices'];
-        $product->set_regular_price(array_pop($prices)['value']);
-        if (!empty($prices)) {
-            $product->set_sale_price($item['salePrices'][0]['value']);
-        }
+        $product->set_price($prices[0]['value']);
+        $product->set_regular_price($prices[0]['value']);
     } else {
-        $product->set_regular_price($item['minPrice']['value']);
+        $product->set_regular_price(0);
+        $product->set_price(0);
     }
 
     if (isset($item['description'])) {
@@ -196,47 +198,56 @@ function update_product($product, $item)
 
     apply_filters(HOOK_PREFIX . 'set_categories', $product->get_id(), $item['pathName']);
     if ($item['variantsCount'] > 0) {
-        apply_filters(HOOK_PREFIX . 'add_attributes', $product, $item['id']);
-        // apply_filters(HOOK_PREFIX . 'set_stock', $product, $item['id']);
-    } else {
-        update_product_variations_queue($product->get_id()); // put in queue to delete existing variations later
-        $product->set_attributes([]);
+        update_queue(ATTRIBUTES_QUEUE, $product->get_id());
+        update_queue(VARIATIONS_QUEUE, $product->get_id());
     }
 
-
     $product->add_meta_data('wsklad_id', $item['id']);
+    $product->add_meta_data('is_wsklad_variation', "false");
 
     if ($item['images']['meta']['size'] > 0) {
         do_action(HOOK_PREFIX . 'log', "Found " . $item['images']['meta']['size'] . ' images for '
             . $product->get_name() . ' adding to queue');
         $product->add_meta_data('wsklad_imgs_url', $item['images']['meta']['href']);
-        $product->add_meta_data('is_wsklad_variation', "false");
-        update_img_queue($product->get_id());
+        update_queue(IMAGES_QUEUE, $product->get_id());
     } else {
         delete_post_meta($product->get_id(), 'wsklad_imgs_url');
-        delete_post_meta($product->get_id(), 'is_wsklad_variation');
         set_post_thumbnail($product->get_id(), get_option('woocommerce_placeholder_image'));
         $product->set_gallery_image_ids([get_option('woocommerce_placeholder_image')]);
         
     }
     $product->save_meta_data();
-    update_acf_fields_queue($product->get_id());
+    update_queue(ACF_QUEUE, $product->get_id());
 }
 
 function create_or_update_woo_products($items)
 {
     foreach ($items as $item) {
+        do_action(HOOK_PREFIX . 'log', "Updating product " . $item['name'] . "..." . 'ID: ' . $item['id']);
+
         $product = get_wsklad_wc_product('draft', $item['id']);
-        
+        $has_modifications = $item['variantsCount'] > 0;
+        $new_product = $product;
+
         if (!$product) {
-            do_action(HOOK_PREFIX . 'log', "Couldn't find " . $item['name'] . ". Creating new one...");
-            $product = new WC_Product_Variable();
-            $product->set_slug($item['id']);
+            $new_product = $has_modifications ? new WC_Product_Variable() : new WC_Product_Simple();
         }
 
-        do_action(HOOK_PREFIX . 'log', "Updating product " . $item['name'] . "..." . 'ID: ' . $item['id']);
-        update_product($product, $item);
-        $product->save();
+        if ($product && $product->is_type('variable') && !$has_modifications) {
+            do_action(HOOK_PREFIX . 'log', "Type changed to Simple");
+            delete_single_product($product, true);
+            $new_product = new WC_Product_Simple();
+        }
+        if ($product && $product->is_type('simple') && $has_modifications) {
+            do_action(HOOK_PREFIX . 'log', "Type changed to Variable");
+            delete_single_product($product, true);
+            $new_product = new WC_Product_Variable();
+        }
+        
+        $new_product->set_slug($item['id']);
+
+        update_product($new_product, $item);
+        $new_product->save();
     }
 }
 
@@ -262,7 +273,7 @@ function add_attributes($product, $item_id)
     $variants = [];
     
     if (!$modifications || empty($modifications['rows'])) {
-        return $product;
+        return;
     }
     
     do_action(HOOK_PREFIX . 'log', 'Found modifications ' . count($modifications['rows']) . ' for ' . $product->get_name());
@@ -287,13 +298,8 @@ function add_attributes($product, $item_id)
         
     }
     
-    if (empty($variants))
-    return $product;
-
-    update_product_variations_queue($product->get_id());
-    $product = apply_filters(HOOK_PREFIX . 'set_variants', $product, $variants);
-
-    return $product;
+    if (empty($variants)) return;
+    apply_filters(HOOK_PREFIX . 'set_variants', $product, $variants);
 }
 
 function find_term_slug($attr_slug, $value_name) {
@@ -313,7 +319,6 @@ function set_variations_for_product($product, $wsklad_id) {
     
     if (!$modifications || empty($modifications['rows'])) {
         do_action(HOOK_PREFIX . 'log', 'Modifications not found'  . ' for ' . $product->get_name());
-        delete_product_variations($product);
         return $product;
     }
 
@@ -401,7 +406,7 @@ function update_variation_for_product($product, $variation_data, $variation) {
         update_post_meta($variation->get_id(), 'is_wsklad_variation', "true");
         if ($variation_data['images_count'] > 0) {
             update_post_meta($variation->get_id(), 'wsklad_imgs_url', $variation_data['images_url']);
-            update_img_queue($variation->get_id());
+            update_queue(IMAGES_QUEUE, $variation->get_id());
         }
 
 }
@@ -424,7 +429,7 @@ function set_variants($product, $variants)
         $attribute = new WC_Product_Attribute();
         $attribute->set_position($pos);
         $attribute->set_visible(true);
-        $attribute->set_variation($variant === "Цвет" ? true : false);
+        $attribute->set_variation(true);
         $pos += 1;
 
         $existingTaxes = wc_get_attribute_taxonomies();
@@ -470,9 +475,9 @@ function set_variants($product, $variants)
     $product->save();
 }
 
-function get_stock($product_id)
+function get_stock($wsklad_id)
 {
-    $data = wsklad_request('/report/stock/bystore/current?filter=assortmentId=' . $product_id);
+    $data = wsklad_request('/report/stock/bystore/current?filter=assortmentId=' . $wsklad_id);
 
     $total = 0.0;
 
@@ -519,7 +524,7 @@ function create_categories_by_path($product_id, $product_pathName = 'Misc')
 
 function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = '')
 {
-
+    $allowed_ext = ['png', 'jpg'];
     $id = check_exist_image_by_url($image_url . $product_id);
     if ($id) {
         return $id;
@@ -528,7 +533,18 @@ function updoad_and_attach_img($product_id, $filename = 'img.jpg', $image_url = 
 
     $uploads_dir = wp_upload_dir();
     $filename_data = wp_check_filetype($filename);
-    $filename = explode('.', $filename)[0] . '.' . $filename_data['ext'];
+    $extention = $filename_data['ext'];
+    if ($extention === 'jpeg') {
+        do_action(HOOK_PREFIX . 'log', "This image format is unsupported by WP. Trying workaround...");
+        $extention = 'jpg';
+    }
+
+    if (!in_array($extention, $allowed_ext)) {
+        do_action(HOOK_PREFIX . 'log', "Error: Image format " . $extention . ' is not supported.');
+        return false;
+    }
+
+    $filename = explode('.', $filename)[0] . '.' . $extention;
     $filename = sanitize_file_name($filename);
     $filename = wp_unique_filename($uploads_dir['path'], $filename);
 
@@ -620,7 +636,7 @@ function process_imgs($product, $imgs_url)
         return;
     $img_ids = [];
     foreach ($images['rows'] as $image) {
-        do_action(HOOK_PREFIX . 'log', 'Trying to download img for ' . $product->get_name() . ' with size ' . $image['size']);
+        do_action(HOOK_PREFIX . 'log', 'Trying to download ' . $image['filename'] . ' for ' . $product->get_name() . ' with size ' . $image['size']);
         $id = updoad_and_attach_img($product->get_id(), $image['filename'], $image['meta']['downloadHref']);
         array_push($img_ids, $id);
     }
@@ -661,36 +677,6 @@ function check_exist_image_by_url($img_url)
     }
 }
 
-function update_product_variations_queue($product_id) {
-    $prev = get_option(HOOK_PREFIX . 'product_variations_queue');
-    if ($prev) {
-        array_push($prev, $product_id);
-    } else {
-        $prev = [$product_id];
-    }
-    update_option(HOOK_PREFIX . 'product_variations_queue', $prev);
-}
-
-function clear_product_variations_queue() {
-    update_option(HOOK_PREFIX . 'product_variations_queue', []);
-}
-
-function update_img_queue($product_id)
-{
-    # Subject to be reworked;
-    $prev = get_option(HOOK_PREFIX . 'img_queue');
-    if ($prev) {
-        array_push($prev, $product_id);
-    } else {
-        $prev = [$product_id];
-    }
-    update_option(HOOK_PREFIX . 'img_queue', $prev);
-}
-
-function clear_img_queue()
-{
-    update_option(HOOK_PREFIX . 'img_queue', []);
-}
 
 function create_global_attribute($name, $slug)
 {
